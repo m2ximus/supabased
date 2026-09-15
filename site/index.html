@@ -3,8 +3,43 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>supabased: one terminal, every Supabase account</title>
-<meta name="description" content="sbx keeps many Supabase CLI logins on your Mac and picks the right one for the folder you're in. Tokens stay in your Keychain.">
+<title>supabased: multiple Supabase accounts in one CLI</title>
+<meta name="description" content="Use the Supabase CLI with more than one account. supabased keeps every Supabase login connected in your terminal and switches to the right account for each project folder. Free, open source, tokens stay in your Mac's Keychain.">
+<link rel="canonical" href="https://www.supabased.dev/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://www.supabased.dev/">
+<meta property="og:title" content="supabased: multiple Supabase accounts in one CLI">
+<meta property="og:description" content="Keep every Supabase account connected in your terminal. The Supabase CLI switches to the right login for each project folder.">
+<meta name="twitter:card" content="summary">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "name": "supabased",
+      "alternateName": "sbx",
+      "url": "https://www.supabased.dev/",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "macOS",
+      "description": "A command-line tool that connects the Supabase CLI to multiple Supabase accounts and multiple projects, switching logins automatically based on the folder you are in.",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "codeRepository": "https://github.com/m2ximus/supabased"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "Can the Supabase CLI be logged in to more than one account?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Not on its own. supabase login stores one access token at a time. supabased saves a token for each of your Supabase accounts in the macOS Keychain and gives the Supabase CLI the right one for the project folder you are in." } },
+        { "@type": "Question", "name": "How do I switch Supabase accounts in the CLI without logging out?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Install supabased, run sbx add for each account, then cd into a linked project. The supabase command uses the account that owns that project automatically, with no supabase logout or login." } },
+        { "@type": "Question", "name": "Does it work with supabase link and many projects?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes. After supabase link, supabased reads the project ref in the folder, finds which of your saved accounts owns that project, and uses that account. Folders can also be pinned to an account with sbx pin." } }
+      ]
+    }
+  ]
+}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -121,7 +156,7 @@
 <body>
 <main>
   <h1>Every Supabase account, one terminal.</h1>
-  <p class="lede">The Supabase CLI only remembers one login. supabased remembers all of them and switches to the right account when you <code>cd</code> into a project.</p>
+  <p class="lede">The Supabase CLI only remembers one login. supabased keeps all your Supabase accounts connected in the terminal and switches to the right one when you <code>cd</code> into a project.</p>
 
   <div class="install">
     <pre id="cmd">git clone https://github.com/m2ximus/supabased.git ~/supabased && ~/supabased/install.sh</pre>
@@ -133,6 +168,15 @@
     <div class="bar"><i></i><i></i><i></i></div>
     <div id="screen"></div>
   </div>
+
+  <section>
+    <h2>Use the Supabase CLI with multiple accounts</h2>
+    <ul class="facts">
+      <li><strong>Many accounts, all logged in.</strong> <span>Personal, work and client Supabase accounts stay connected to the CLI at once. No more <code>supabase logout</code> and <code>supabase login</code> every time you change project.</span></li>
+      <li><strong>Many projects, the right login for each.</strong> <span>Every folder linked with <code>supabase link</code> uses the account that owns its project, so <code>supabase db push</code> goes to the database you expect.</span></li>
+      <li><strong>Works with the commands you already use.</strong> <span>Migrations, type generation, functions deploy: keep typing <code>supabase</code> and supabased handles the auth.</span></li>
+    </ul>
+  </section>
 
   <section>
     <h2>Set it up</h2>
@@ -157,6 +201,12 @@
   <section>
     <h2>Questions</h2>
     <div class="faq">
+      <details><summary>Can the Supabase CLI be logged in to more than one account?</summary>
+        <p>Not on its own. <code>supabase login</code> stores one access token at a time. supabased saves a token for each of your Supabase accounts in the macOS Keychain and gives the Supabase CLI the right one for the project folder you're in.</p></details>
+      <details><summary>How do I switch Supabase accounts in the CLI without logging out?</summary>
+        <p>Run <code>sbx add</code> once for each account, then <code>cd</code> into a linked project. The <code>supabase</code> command uses the account that owns that project, with no logout or login.</p></details>
+      <details><summary>Does it work with supabase link and many projects?</summary>
+        <p>Yes. After <code>supabase link</code>, supabased reads the project ref in that folder and finds which of your accounts owns it. You can also pin a folder to an account with <code>sbx pin name</code>.</p></details>
       <details><summary>What do I need first?</summary>
         <p>macOS 15 or later, zsh (the macOS default), git, and the <a href="https://supabase.com/docs/guides/cli/getting-started">Supabase CLI</a>. You can install the CLI with <code>brew install supabase/tap/supabase</code>.</p></details>
       <details><summary>Where do I get a token?</summary>
@@ -184,7 +234,7 @@
     </div>
   </section>
 </main>
-<footer>sbx is free to use and not affiliated with Supabase.</footer>
+<footer>supabased is free, open source, and not affiliated with Supabase. Made by <a href="https://max-os.xyz">Max</a>.</footer>
 
 <script>
   document.getElementById('copy').addEventListener('click', async (e) => {
