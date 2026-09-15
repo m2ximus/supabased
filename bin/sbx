@@ -1,0 +1,287 @@
+#!/bin/bash -p
+# sbx — per-folder Supabase CLI accounts, tokens in the macOS Keychain.
+# bash 3.2 compatible. Tokens never appear in argv, files, stdout or errors.
+#
+# `-p` (privileged mode): bash ignores BASH_ENV/ENV, SHELLOPTS, BASHOPTS, CDPATH,
+# GLOBIGNORE and env-imported functions, so a repo's environment cannot hijack us.
+set -euo pipefail
+set +x
+umask 077
+
+SBX_HOME=${SBX_HOME:-$HOME/.config/sbx}
+# Hardcoded on purpose: no environment variable can redirect tokens to another
+# host or keychain service. Tests swap the binary paths in a copy of this file.
+readonly SBX_API=https://api.supabase.com
+readonly SBX_SERVICE=sbx-supabase
+readonly SECURITY=/usr/bin/security
+readonly CURL=/usr/bin/curl
+readonly JQ=/usr/bin/jq
+
+RE_NAME='^[a-z0-9][a-z0-9_-]{0,31}$'
+RE_REF='^[a-z0-9]{20}$'
+RE_TOKEN='^sbp_[A-Za-z0-9_]{20,}$'
+
+die() { printf 'sbx: %s\n' "$1" >&2; exit 1; }
+warn() { printf 'sbx: %s\n' "$1" >&2; }
+valid_name()  { [[ $1 =~ $RE_NAME ]]; }
+valid_ref()   { [[ $1 =~ $RE_REF ]]; }
+valid_token() { [[ $1 =~ $RE_TOKEN ]]; }
+ensure_home() { mkdir -p "$SBX_HOME" && chmod 700 "$SBX_HOME"; }
+
+# ---- keychain primitives (token only ever travels via stdin / captured stdout) ----
+kc_set() {  # NAME TOKEN — callers must have validated both (S5)
+  printf 'add-generic-password -U -s %s -a %s -w %s\n' "$SBX_SERVICE" "$1" "$2" \
+    | "$SECURITY" -i >/dev/null
+}
+kc_get() { "$SECURITY" find-generic-password -s "$SBX_SERVICE" -a "$1" -w 2>/dev/null; }
+kc_del() { "$SECURITY" delete-generic-password -s "$SBX_SERVICE" -a "$1" >/dev/null 2>&1; }
+
+# ---- Management API ----
+api_projects() {  # TOKEN -> JSON on stdout; header passed via stdin (S1, S6)
+  # -q MUST be the first argument: it stops curl reading ~/.curlrc, $CURL_HOME
+  # or $XDG_CONFIG_HOME, which could otherwise add `resolve`/`insecure`/`proxy`.
+  printf 'Authorization: Bearer %s\n' "$1" \
+    | "$CURL" -q -fsS --proto =https --max-time 15 -H @- "$SBX_API/v1/projects"
+}
+
+# ---- account files ----
+account_names() { [ -e "$SBX_HOME/accounts" ] && cat "$SBX_HOME/accounts" || true; }
+has_account() { account_names | grep -qx -- "$1"; }
+default_name() { [ -s "$SBX_HOME/default" ] && head -n1 "$SBX_HOME/default" || true; }
+require_account() {
+  valid_name "$1" || die "invalid account name"
+  has_account "$1" || die "no such account: $1"
+}
+
+read_token() {  # prompts on tty; value only ever in a variable (S2)
+  local t
+  if [ -t 0 ]; then
+    printf 'Supabase access token (input hidden): ' >&2
+    IFS= read -rs t </dev/tty
+    printf '\n' >&2
+  else
+    IFS= read -r t
+  fi
+  printf '%s' "$t"
+}
+
+cmd_add() {
+  [ $# -eq 1 ] || die "usage: sbx add <name>  (token is prompted, never an argument)"
+  local name=$1 tok n
+  valid_name "$name" || die "invalid account name (use ^[a-z0-9][a-z0-9_-]{0,31}$)"
+  tok=$(read_token)
+  valid_token "$tok" || die "token does not look like a Supabase access token"
+  n=$(api_projects "$tok" | "$JQ" -r 'length') || die "token rejected by Supabase API"
+  ensure_home
+  kc_set "$name" "$tok" || die "keychain write failed"
+  has_account "$name" || printf '%s\n' "$name" >> "$SBX_HOME/accounts"
+  [ -n "$(default_name)" ] || printf '%s\n' "$name" > "$SBX_HOME/default"
+  rm -f "$SBX_HOME/ref-cache"   # ownership may have changed (incl. negative entries)
+  printf 'added %s (%s projects)\n' "$name" "$n"
+}
+
+cmd_remove() {
+  [ $# -eq 1 ] || die "usage: sbx remove <name>"
+  local name=$1 tmp
+  require_account "$name"
+  kc_del "$name" || warn "no keychain item for $name (continuing)"
+  tmp=$(mktemp "$SBX_HOME/.tmp.XXXXXX")
+  grep -vx -- "$name" "$SBX_HOME/accounts" > "$tmp" || true
+  mv "$tmp" "$SBX_HOME/accounts"
+  if [ "$(default_name)" = "$name" ]; then rm -f "$SBX_HOME/default"; fi
+  if [ -e "$SBX_HOME/ref-cache" ]; then
+    tmp=$(mktemp "$SBX_HOME/.tmp.XXXXXX")
+    grep -v -- " $name\$" "$SBX_HOME/ref-cache" > "$tmp" || true
+    mv "$tmp" "$SBX_HOME/ref-cache"
+  fi
+  printf 'removed %s\n' "$name"
+}
+
+cmd_list() {
+  local projects=0 name def tok
+  case "${1:-}" in
+    --projects) projects=1 ;;
+    "") ;;
+    *) die "usage: sbx list [--projects]" ;;
+  esac
+  def=$(default_name)
+  account_names | while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if [ "$name" = "$def" ]; then printf '%s *\n' "$name"; else printf '%s\n' "$name"; fi
+    if [ "$projects" = 1 ]; then
+      if tok=$(kc_get "$name"); then
+        api_projects "$tok" | "$JQ" -r '.[] | "  \(.id)  \(.name)"' \
+          || warn "could not list projects for $name"
+      else
+        warn "keychain lookup failed for $name"
+      fi
+    fi
+  done
+}
+
+# ---- resolver ----
+ref_owner() {  # REF -> NAME on stdout, or return 1 (miss is negative-cached as "REF -")
+  local ref=$1 name tok
+  if [ -e "$SBX_HOME/ref-cache" ]; then
+    name=$(grep -- "^$ref " "$SBX_HOME/ref-cache" | head -n1 | cut -d' ' -f2) || true
+    if [ "$name" = - ]; then return 1; fi
+    if [ -n "$name" ] && valid_name "$name" && has_account "$name"; then
+      printf '%s' "$name"; return 0
+    fi
+  fi
+  for name in $(account_names); do
+    tok=$(kc_get "$name") || continue
+    if api_projects "$tok" 2>/dev/null | "$JQ" -e --arg r "$ref" 'any(.[]; .id==$r)' >/dev/null 2>&1; then
+      ensure_home
+      printf '%s %s\n' "$ref" "$name" >> "$SBX_HOME/ref-cache"
+      printf '%s' "$name"; return 0
+    fi
+  done
+  ensure_home
+  printf '%s -\n' "$ref" >> "$SBX_HOME/ref-cache"
+  return 1
+}
+
+resolve() {  # DIR -> "NAME<TAB>SOURCE<TAB>REF" or return 1
+  local d=$1 name ref=- owner def
+  d=$(cd "$d" 2>/dev/null && pwd) || return 1
+  while :; do
+    # A project-ref in this directory is reported alongside whichever source wins.
+    if [ -f "$d/supabase/.temp/project-ref" ]; then
+      ref=$(head -n1 "$d/supabase/.temp/project-ref" | tr -d '[:space:]')
+      valid_ref "$ref" || ref=-
+    fi
+    if [ -f "$d/.sbx" ]; then
+      name=$(head -n1 "$d/.sbx" | tr -d '[:space:]')
+      if valid_name "$name" && has_account "$name"; then
+        printf '%s\tpin:%s/.sbx\t%s\n' "$name" "$d" "$ref"; return 0
+      fi
+      warn "ignoring .sbx at $d (unknown account)"
+    fi
+    if [ "$ref" != - ]; then
+      if owner=$(ref_owner "$ref"); then
+        printf '%s\tref\t%s\n' "$owner" "$ref"; return 0
+      fi
+      # Never fall back to the default here: a linked project we do not own must
+      # not be driven with some other account's token.
+      warn "no saved account owns project $ref"
+      return 1
+    fi
+    [ "$d" = / ] && break
+    d=$(dirname "$d")
+  done
+  def=$(default_name)
+  if [ -n "$def" ] && has_account "$def"; then
+    printf '%s\tdefault\t%s\n' "$def" "$ref"; return 0
+  fi
+  return 1
+}
+
+cmd_which() {
+  local dir=${1:-$PWD}
+  [ $# -le 1 ] || die "usage: sbx which [dir]"
+  [ -d "$dir" ] || die "no such directory: $dir"
+  resolve "$dir" || die "no account for $dir"
+}
+
+cmd_pin() {
+  [ $# -eq 1 ] || die "usage: sbx pin <name>"
+  require_account "$1"
+  ( umask 022; printf '%s\n' "$1" > "$PWD/.sbx" )
+  printf 'pinned %s in %s/.sbx\n' "$1" "$PWD"
+}
+
+cmd_refresh() {
+  rm -f "$SBX_HOME/ref-cache"
+  printf 'ref cache cleared\n'
+}
+
+# ---- exec / status / init ----
+cmd_exec() {
+  [ "${1:-}" = -- ] || die "usage: sbx exec -- <command> [args...]"
+  shift
+  [ $# -gt 0 ] || die "usage: sbx exec -- <command> [args...]"
+  local hit name source ref tok
+  # Explicit override by the user wins; pass through untouched.
+  if [ -n "${SUPABASE_ACCESS_TOKEN:-}" ]; then exec "$@"; fi
+  if hit=$(resolve "$PWD"); then
+    IFS=$'\t' read -r name source ref <<EOF
+$hit
+EOF
+    tok=$(kc_get "$name") || die "keychain lookup failed for $name"
+    valid_token "$tok" || die "keychain item for $name is not a valid token"
+    [ -n "${SBX_QUIET:-}" ] || printf 'sbx → %s (%s)\n' "$name" "$source" >&2
+    SUPABASE_ACCESS_TOKEN="$tok" exec "$@"   # env of the child only (S1, S3)
+  fi
+  warn "no account for this folder; using supabase's own login"
+  exec "$@"
+}
+
+cmd_status() {
+  local hit name source ref
+  if hit=$(resolve "$PWD"); then
+    IFS=$'\t' read -r name source ref <<EOF
+$hit
+EOF
+    printf 'account: %s\nsource: %s\nproject: %s\n' "$name" "$source" "$ref"
+  else
+    printf 'no account for this folder\n'
+  fi
+}
+
+cmd_init() {
+  case "${1:-}" in
+    zsh)
+      printf '# sbx: per-folder Supabase accounts\n'
+      # Strip env vars that could alter bash/curl behaviour before sbx starts.
+      printf 'supabase() { command env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS -u PS4 -u CURL_HOME -u XDG_CONFIG_HOME sbx exec -- supabase "$@"; }\n' ;;
+    *) die "usage: sbx init zsh" ;;
+  esac
+}
+
+cmd_default() {
+  [ $# -eq 1 ] || die "usage: sbx default <name>"
+  require_account "$1"
+  ensure_home
+  printf '%s\n' "$1" > "$SBX_HOME/default"
+  printf 'default is now %s\n' "$1"
+}
+
+usage() {
+  cat <<'EOF'
+sbx — per-folder Supabase CLI accounts (tokens live in the macOS Keychain)
+
+  sbx add <name>            store a token for <name> (prompted, never an argument)
+  sbx remove <name>         delete the token and forget the account
+  sbx list [--projects]     list accounts (* = default), optionally with projects
+  sbx default <name>        set the fallback account
+  sbx pin <name>            write ./.sbx so this folder uses <name>
+  sbx which [dir]           show which account a folder resolves to
+  sbx status                show account/source/project for the current folder
+  sbx exec -- cmd [args]    run cmd with SUPABASE_ACCESS_TOKEN set for it only
+  sbx refresh               clear the project-ref -> account cache
+  sbx init zsh              print the zsh `supabase` wrapper function
+  sbx help                  this text
+EOF
+}
+
+main() {
+  local cmd=${1:-help}
+  [ $# -gt 0 ] && shift
+  case "$cmd" in
+    help|-h|--help) usage ;;
+    add) cmd_add "$@" ;;
+    remove|rm) cmd_remove "$@" ;;
+    list|ls) cmd_list "$@" ;;
+    default) cmd_default "$@" ;;
+    which) cmd_which "$@" ;;
+    pin) cmd_pin "$@" ;;
+    refresh) cmd_refresh "$@" ;;
+    exec) cmd_exec "$@" ;;
+    status) cmd_status "$@" ;;
+    init) cmd_init "$@" ;;
+    *) die "unknown command: $cmd (try 'sbx help')" ;;
+  esac
+}
+
+main "$@"

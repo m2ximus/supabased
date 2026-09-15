@@ -1,0 +1,49 @@
+#!/bin/bash
+# Test stub for macOS `security`. Records argv; stores items as files in $STUB_KC.
+set -u
+printf 'security %s\n' "$*" >> "$STUB_ARGV_LOG"
+kc=${STUB_KC:?}
+
+if [ "${1:-}" = "-i" ]; then
+  # Interactive mode: commands on stdin (this is how tokens must arrive — never argv).
+  while IFS= read -r line; do
+    printf 'security-stdin %s\n' "$line" >> "$STUB_ARGV_LOG.stdin"
+    set -- $line
+    [ "$1" = "add-generic-password" ] || continue
+    shift
+    svc=; acct=; pw=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -U) shift ;;
+        -s) svc=$2; shift 2 ;;
+        -a) acct=$2; shift 2 ;;
+        -w) pw=$2; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    printf '%s' "$pw" > "$kc/$svc.$acct"
+  done
+  exit 0
+fi
+
+cmd=$1; shift
+svc=; acct=; want_w=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s) svc=$2; shift 2 ;;
+    -a) acct=$2; shift 2 ;;
+    -w) want_w=1; shift ;;
+    *) shift ;;
+  esac
+done
+f="$kc/$svc.$acct"
+case "$cmd" in
+  find-generic-password)
+    [ -e "$f" ] || exit 44
+    [ "$want_w" = 1 ] && cat "$f"
+    exit 0 ;;
+  delete-generic-password)
+    [ -e "$f" ] || exit 44
+    rm -f "$f"; exit 0 ;;
+  *) exit 1 ;;
+esac

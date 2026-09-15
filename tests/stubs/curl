@@ -1,0 +1,20 @@
+#!/bin/bash
+# Test stub for curl. Records argv; expects the Authorization header on stdin (-H @-).
+set -u
+printf 'curl %s\n' "$*" >> "$STUB_ARGV_LOG"
+tok=
+while IFS= read -r line; do
+  case "$line" in
+    "Authorization: Bearer "*) tok=${line#Authorization: Bearer } ;;
+  esac
+done
+url=
+for a in "$@"; do url=$a; done
+case "$url" in
+  */v1/projects)
+    if [ -n "$tok" ] && [ -e "${STUB_API:?}/$tok.json" ]; then
+      cat "$STUB_API/$tok.json"; exit 0
+    fi
+    exit 22 ;;
+esac
+exit 22
