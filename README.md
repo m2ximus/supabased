@@ -192,3 +192,7 @@ bash -n bin/sbx
 ```
 
 Design: `docs/superpowers/specs/2026-09-14-sbx-design.md`.
+
+---
+
+Supabased is free and open source. Supabased is not affiliated with Supabase.
