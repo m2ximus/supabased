@@ -4,11 +4,28 @@ The Supabase CLI holds one login at a time. supabased (command: `sbx`) keeps tok
 accounts in the macOS Keychain and makes `supabase ...` use the right one for the
 folder you are in — no manual switching.
 
+Website: <https://www.supabased.dev> (source: [supabased-site](https://github.com/m2ximus/supabased-site)).
+
+## What's in here
+
+No compiled binary. `bin/sbx` is a single bash script, short enough to read top
+to bottom before you run it — that is the whole tool.
+
+```
+bin/sbx      the tool, 287 lines of bash
+install.sh   symlinks bin/sbx into ~/.local/bin and adds one line to ~/.zshrc
+tests/       pure-bash tests, with `security` and `curl` stubbed
+docs/        design spec and implementation plan
+```
+
 ## Install
 
 ```sh
 git clone https://github.com/m2ximus/supabased.git ~/supabased && ~/supabased/install.sh
 ```
+
+Read `bin/sbx` before running it if you'd rather not run an unread script — it
+handles access tokens, so that's a reasonable thing to want.
 
 The installer symlinks `bin/sbx` into `~/.local/bin` and appends
 `eval "$(sbx init zsh)"` to `~/.zshrc` (backup at `~/.zshrc.bak-sbx`). That line
