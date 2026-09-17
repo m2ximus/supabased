@@ -1,6 +1,6 @@
-# supabased — per-folder Supabase CLI accounts
+# Supabased — Multiple Supabase Accounts via CLI
 
-The Supabase CLI holds one login at a time. supabased (command: `sbx`) keeps tokens for any number of
+The Supabase CLI holds one login at a time. Supabased (command: `sbx`) keeps tokens for any number of
 accounts in the macOS Keychain and makes `supabase ...` use the right one for the
 folder you are in — no manual switching.
 
